@@ -42,9 +42,13 @@ module.exports = (sequelize, DataTypes) => {
     },
     studentId: {
       type: DataTypes.STRING,
+      allowNull: true,
       unique: true,
       validate: {
-        len: [3, 20]
+        len: {
+          args: [3, 20],
+          msg: 'Student ID must be between 3 and 20 characters'
+        }
       }
     },
     balance: {
@@ -56,10 +60,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     photoUrl: {
       type: DataTypes.STRING,
-      allowNull: true,
-      validate: {
-        isUrl: true
-      }
+      allowNull: true
     },
     firebaseUid: {
       type: DataTypes.STRING,
