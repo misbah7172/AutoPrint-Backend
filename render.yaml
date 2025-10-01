@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: autoprint-backend
+    runtime: node
+    env: node
+    plan: free
+    region: oregon
+    buildCommand: npm ci --only=production
+    startCommand: node minimal-start.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        value: postgresql://neondb_owner:npg_8uexFD5ArTqV@ep-divine-credit-ad52ykm7.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: SESSION_SECRET
+        generateValue: true
