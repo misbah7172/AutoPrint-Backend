@@ -6,7 +6,7 @@ services:
     plan: free
     region: oregon
     buildCommand: npm ci --only=production
-    startCommand: node minimal-start.js
+    startCommand: node src/index.js
     envVars:
       - key: NODE_ENV
         value: production
