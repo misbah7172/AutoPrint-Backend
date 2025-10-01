@@ -65,9 +65,13 @@ async function addMissingColumns() {
     
   } catch (error) {
     console.error('❌ Database connection failed:', error);
+    throw error;
   } finally {
-    await sequelize.close();
-    process.exit(0);
+    // Only close connection if called directly, not as module
+    if (require.main === module) {
+      await sequelize.close();
+      process.exit(0);
+    }
   }
 }
 

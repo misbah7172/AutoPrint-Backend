@@ -159,16 +159,17 @@ const startServer = async () => {
     // Update database schema with new columns
     if (process.env.NODE_ENV === 'production') {
       try {
+        console.log('🔄 Initializing database schema and admin user...');
         const updateSchema = require('../update-schema');
         await updateSchema();
         console.log('✅ Database schema updated successfully.');
         
-        // Create admin user
         const createAdminUser = require('../create-admin-user');
         await createAdminUser();
         console.log('✅ Admin user initialization completed.');
       } catch (error) {
-        console.log('ℹ️ Schema update or admin creation not needed:', error.message);
+        console.log('⚠️ Schema/admin initialization warning:', error.message);
+        // Don't fail deployment if schema update has issues
       }
     }
 

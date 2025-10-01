@@ -50,8 +50,12 @@ async function createAdminUser() {
     
   } catch (error) {
     console.error('❌ Error creating admin user:', error);
+    throw error;
   } finally {
-    await sequelize.close();
+    // Only close connection if called directly, not as module
+    if (require.main === module) {
+      await sequelize.close();
+    }
   }
 }
 
