@@ -4,13 +4,15 @@
   "description": "AutoPrint Backend API Server",
   "main": "src/index.js",
   "scripts": {
-    "start": "node minimal-start.js",
-    "start:prod": "node start.js",
+    "start": "node src/index.js",
+    "start:prod": "node src/index.js",
+    "start:minimal": "node minimal-start.js",
     "start:full": "node src/index.js",
     "dev": "nodemon src/index.js",
     "test": "jest",
     "db:migrate": "npx sequelize-cli db:migrate",
-    "db:setup": "node setup-database.js"
+    "db:setup": "node setup-database.js",
+    "create-admin": "node create-admin-production.js"
   },
   "keywords": [
     "autoprint",
