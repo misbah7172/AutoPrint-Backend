@@ -1,7 +1,7 @@
 const express = require('express');
 const { body } = require('express-validator');
 const jwt = require('jsonwebtoken');
-const { User, Document, PrintJob, Payment } = require('../models');
+const { User, Document, PrintJob, Payment, sequelize } = require('../models');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { validateRequest } = require('../middleware/validation');
 const { requireRole } = require('../middleware/auth');
@@ -92,58 +92,167 @@ router.use(requireRole(['admin']));
 
 // GET /api/admin/dashboard
 router.get('/dashboard', asyncHandler(async (req, res) => {
-  const stats = await Promise.all([
-    User.count(),
-    Document.count(),
-    PrintJob.count(),
-    Payment.sum('amount'),
-    PrintJob.count({ where: { status: 'queued' } }),
-    PrintJob.count({ where: { status: 'printing' } })
-  ]);
+  try {
+    const [
+      totalUsers,
+      totalDocuments, 
+      totalPrintJobs,
+      totalRevenue,
+      queuedJobs,
+      printingJobs,
+      completedJobs,
+      failedJobs,
+      pendingPayments,
+      verifiedPayments,
+      activeUsers,
+      todayRevenue
+    ] = await Promise.all([
+      User.count({ where: { role: 'student' } }),
+      Document.count(),
+      PrintJob.count(),
+      Payment.sum('amount', { where: { status: 'completed' } }),
+      PrintJob.count({ where: { status: 'queued' } }),
+      PrintJob.count({ where: { status: 'printing' } }),
+      PrintJob.count({ where: { status: 'completed' } }),
+      PrintJob.count({ where: { status: 'failed' } }),
+      Payment.count({ where: { status: 'pending' } }),
+      Payment.count({ where: { status: 'verified' } }),
+      User.count({ 
+        where: { 
+          role: 'student',
+          isActive: true,
+          lastLoginAt: {
+            [sequelize.Sequelize.Op.gte]: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // Last 7 days
+          }
+        }
+      }),
+      Payment.sum('amount', { 
+        where: { 
+          status: 'completed',
+          createdAt: {
+            [sequelize.Sequelize.Op.gte]: new Date(new Date().setHours(0, 0, 0, 0))
+          }
+        }
+      })
+    ]);
 
-  res.json({
-    totalUsers: stats[0],
-    totalDocuments: stats[1],
-    totalPrintJobs: stats[2],
-    totalRevenue: stats[3] || 0,
-    queuedJobs: stats[4],
-    printingJobs: stats[5]
-  });
+    // Get recent activity
+    const recentJobs = await PrintJob.findAll({
+      limit: 5,
+      order: [['createdAt', 'DESC']],
+      include: [
+        { model: User, as: 'user', attributes: ['firstName', 'lastName', 'email'] },
+        { model: Document, as: 'document', attributes: ['originalName'] }
+      ]
+    });
+
+    const recentPayments = await Payment.findAll({
+      limit: 5,
+      order: [['createdAt', 'DESC']],
+      include: [
+        { model: User, as: 'user', attributes: ['firstName', 'lastName', 'email'] }
+      ]
+    });
+
+    res.json({
+      summary: {
+        totalUsers,
+        totalDocuments,
+        totalPrintJobs,
+        totalRevenue: totalRevenue || 0,
+        todayRevenue: todayRevenue || 0,
+        activeUsers
+      },
+      jobStats: {
+        queued: queuedJobs,
+        printing: printingJobs,
+        completed: completedJobs,
+        failed: failedJobs
+      },
+      paymentStats: {
+        pending: pendingPayments,
+        verified: verifiedPayments
+      },
+      recentActivity: {
+        jobs: recentJobs,
+        payments: recentPayments
+      }
+    });
+  } catch (error) {
+    console.error('Dashboard error:', error);
+    res.status(500).json({ error: 'Failed to load dashboard data' });
+  }
 }));
 
 // GET /api/admin/users
 router.get('/users', asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, search, role, isActive } = req.query;
-  
-  const where = {};
-  if (search) {
-    where[Op.or] = [
-      { firstName: { [Op.iLike]: `%${search}%` } },
-      { lastName: { [Op.iLike]: `%${search}%` } },
-      { email: { [Op.iLike]: `%${search}%` } },
-      { studentId: { [Op.iLike]: `%${search}%` } }
-    ];
+  try {
+    const { page = 1, limit = 10, search, role, isActive } = req.query;
+    
+    const where = {};
+    if (search) {
+      where[sequelize.Sequelize.Op.or] = [
+        { firstName: { [sequelize.Sequelize.Op.iLike]: `%${search}%` } },
+        { lastName: { [sequelize.Sequelize.Op.iLike]: `%${search}%` } },
+        { email: { [sequelize.Sequelize.Op.iLike]: `%${search}%` } },
+        { studentId: { [sequelize.Sequelize.Op.iLike]: `%${search}%` } }
+      ];
+    }
+    if (role) where.role = role;
+    if (isActive !== undefined) where.isActive = isActive === 'true';
+
+    const users = await User.findAndCountAll({
+      where,
+      limit: parseInt(limit),
+      offset: (parseInt(page) - 1) * parseInt(limit),
+      order: [['createdAt', 'DESC']],
+      attributes: { exclude: ['password'] }, // Don't send passwords
+      include: [
+        { 
+          model: PrintJob, 
+          as: 'printJobs', 
+          attributes: ['id', 'status', 'createdAt'],
+          limit: 5,
+          order: [['createdAt', 'DESC']]
+        },
+        { 
+          model: Payment, 
+          as: 'payments', 
+          attributes: ['id', 'amount', 'status', 'createdAt'],
+          limit: 5,
+          order: [['createdAt', 'DESC']]
+        }
+      ]
+    });
+
+    // Add computed fields
+    const usersWithStats = await Promise.all(users.rows.map(async (user) => {
+      const userStats = await Promise.all([
+        PrintJob.count({ where: { userId: user.id } }),
+        Payment.sum('amount', { where: { userId: user.id, status: 'completed' } }),
+        PrintJob.count({ where: { userId: user.id, status: 'completed' } })
+      ]);
+
+      return {
+        ...user.toJSON(),
+        stats: {
+          totalPrintJobs: userStats[0] || 0,
+          totalSpent: userStats[1] || 0,
+          completedJobs: userStats[2] || 0
+        }
+      };
+    }));
+
+    res.json({
+      users: usersWithStats,
+      totalCount: users.count,
+      currentPage: parseInt(page),
+      totalPages: Math.ceil(users.count / parseInt(limit))
+    });
+  } catch (error) {
+    console.error('Users endpoint error:', error);
+    res.status(500).json({ error: 'Failed to load users' });
   }
-  if (role) where.role = role;
-  if (isActive !== undefined) where.isActive = isActive === 'true';
-
-  const users = await User.findAndCountAll({
-    where,
-    limit: parseInt(limit),
-    offset: (parseInt(page) - 1) * parseInt(limit),
-    order: [['createdAt', 'DESC']],
-    include: [
-      { model: PrintJob, as: 'printJobs', attributes: ['id', 'status'] },
-      { model: Payment, as: 'payments', attributes: ['id', 'amount', 'status'] }
-    ]
-  });
-
-  res.json({
-    users: users.rows,
-    totalCount: users.count,
-    currentPage: parseInt(page),
-    totalPages: Math.ceil(users.count / parseInt(limit))
-  });
 }));
 
 // PUT /api/admin/users/:id
@@ -194,26 +303,187 @@ router.get('/print-jobs', asyncHandler(async (req, res) => {
 
 // GET /api/admin/payments
 router.get('/payments', asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, status, userId } = req.query;
-  
-  const where = {};
-  if (status) where.status = status;
-  if (userId) where.userId = userId;
+  try {
+    const { page = 1, limit = 10, status, userId, method } = req.query;
+    
+    const where = {};
+    if (status) where.status = status;
+    if (userId) where.userId = userId;
+    if (method) where.paymentMethod = method;
 
-  const payments = await Payment.findAndCountAll({
-    where,
-    include: ['user', 'printJob'],
-    limit: parseInt(limit),
-    offset: (parseInt(page) - 1) * parseInt(limit),
-    order: [['createdAt', 'DESC']]
-  });
+    const payments = await Payment.findAndCountAll({
+      where,
+      include: [
+        { 
+          model: User, 
+          as: 'user', 
+          attributes: ['id', 'firstName', 'lastName', 'email', 'studentId'] 
+        }
+      ],
+      limit: parseInt(limit),
+      offset: (parseInt(page) - 1) * parseInt(limit),
+      order: [['createdAt', 'DESC']]
+    });
 
-  res.json({
-    payments: payments.rows,
-    totalCount: payments.count,
-    currentPage: parseInt(page),
-    totalPages: Math.ceil(payments.count / parseInt(limit))
-  });
+    res.json({
+      payments: payments.rows,
+      totalCount: payments.count,
+      currentPage: parseInt(page),
+      totalPages: Math.ceil(payments.count / parseInt(limit))
+    });
+  } catch (error) {
+    console.error('Payments endpoint error:', error);
+    res.status(500).json({ error: 'Failed to load payments' });
+  }
+}));
+
+// PUT /api/admin/payments/:id/verify
+router.put('/payments/:id/verify', asyncHandler(async (req, res) => {
+  try {
+    const { notes } = req.body;
+    const payment = await Payment.findByPk(req.params.id, {
+      include: [{ model: User, as: 'user' }]
+    });
+    
+    if (!payment) {
+      return res.status(404).json({ error: 'Payment not found' });
+    }
+
+    await payment.update({
+      status: 'verified',
+      verificationDetails: {
+        verifiedBy: req.user.email,
+        verifiedAt: new Date(),
+        notes: notes || 'Payment verified by admin'
+      }
+    });
+
+    // Update user balance
+    if (payment.user) {
+      await payment.user.update({
+        balance: parseFloat(payment.user.balance || 0) + parseFloat(payment.amount)
+      });
+    }
+
+    res.json({
+      message: 'Payment verified successfully',
+      payment: await Payment.findByPk(payment.id, {
+        include: [{ model: User, as: 'user', attributes: ['id', 'firstName', 'lastName', 'email'] }]
+      })
+    });
+  } catch (error) {
+    console.error('Payment verification error:', error);
+    res.status(500).json({ error: 'Failed to verify payment' });
+  }
+}));
+
+// GET /api/admin/queue
+router.get('/queue', asyncHandler(async (req, res) => {
+  try {
+    const { status = 'queued' } = req.query;
+    
+    const queuedJobs = await PrintJob.findAll({
+      where: { 
+        status: ['queued', 'printing', 'waiting_for_confirm']
+      },
+      include: [
+        { 
+          model: User, 
+          as: 'user', 
+          attributes: ['id', 'firstName', 'lastName', 'email', 'studentId'] 
+        },
+        { 
+          model: Document, 
+          as: 'document', 
+          attributes: ['id', 'originalName', 'pageCount', 'fileSize'] 
+        },
+        { 
+          model: Payment, 
+          as: 'payment', 
+          attributes: ['id', 'amount', 'status'] 
+        }
+      ],
+      order: [
+        ['queuePosition', 'ASC'],
+        ['createdAt', 'ASC']
+      ]
+    });
+
+    // Separate by status
+    const queue = {
+      queued: queuedJobs.filter(job => job.status === 'queued'),
+      printing: queuedJobs.filter(job => job.status === 'printing'),
+      waitingConfirm: queuedJobs.filter(job => job.status === 'waiting_for_confirm')
+    };
+
+    res.json({
+      queue,
+      summary: {
+        totalInQueue: queue.queued.length,
+        currentlyPrinting: queue.printing.length,
+        waitingConfirmation: queue.waitingConfirm.length,
+        estimatedWaitTime: queue.queued.length * 5 // 5 minutes per job estimate
+      }
+    });
+  } catch (error) {
+    console.error('Queue endpoint error:', error);
+    res.status(500).json({ error: 'Failed to load queue' });
+  }
+}));
+
+// PUT /api/admin/queue/:id/start
+router.put('/queue/:id/start', asyncHandler(async (req, res) => {
+  try {
+    const printJob = await PrintJob.findByPk(req.params.id);
+    
+    if (!printJob) {
+      return res.status(404).json({ error: 'Print job not found' });
+    }
+
+    await printJob.update({
+      status: 'printing',
+      startedAt: new Date(),
+      estimatedCompletionTime: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes from now
+    });
+
+    res.json({
+      message: 'Print job started',
+      printJob: await PrintJob.findByPk(printJob.id, {
+        include: ['user', 'document', 'payment']
+      })
+    });
+  } catch (error) {
+    console.error('Start print job error:', error);
+    res.status(500).json({ error: 'Failed to start print job' });
+  }
+}));
+
+// PUT /api/admin/queue/:id/complete
+router.put('/queue/:id/complete', asyncHandler(async (req, res) => {
+  try {
+    const { notes } = req.body;
+    const printJob = await PrintJob.findByPk(req.params.id);
+    
+    if (!printJob) {
+      return res.status(404).json({ error: 'Print job not found' });
+    }
+
+    await printJob.update({
+      status: 'completed',
+      actualCompletionTime: new Date(),
+      operatorNotes: notes || 'Job completed successfully'
+    });
+
+    res.json({
+      message: 'Print job completed',
+      printJob: await PrintJob.findByPk(printJob.id, {
+        include: ['user', 'document', 'payment']
+      })
+    });
+  } catch (error) {
+    console.error('Complete print job error:', error);
+    res.status(500).json({ error: 'Failed to complete print job' });
+  }
 }));
 
 // GET /api/admin/reports/revenue
