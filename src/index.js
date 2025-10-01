@@ -156,6 +156,17 @@ const startServer = async () => {
     await sequelize.authenticate();
     console.log('✅ Database connection established successfully.');
 
+    // Update database schema with new columns
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        const updateSchema = require('../update-schema');
+        await updateSchema();
+        console.log('✅ Database schema updated successfully.');
+      } catch (error) {
+        console.log('ℹ️ Schema update not needed or already applied:', error.message);
+      }
+    }
+
     // Sync database models (use { force: false } in production)
     if (process.env.NODE_ENV !== 'production') {
       await sequelize.sync({ alter: true });
