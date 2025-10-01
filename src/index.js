@@ -162,8 +162,13 @@ const startServer = async () => {
         const updateSchema = require('../update-schema');
         await updateSchema();
         console.log('✅ Database schema updated successfully.');
+        
+        // Create admin user
+        const createAdminUser = require('../create-admin-user');
+        await createAdminUser();
+        console.log('✅ Admin user initialization completed.');
       } catch (error) {
-        console.log('ℹ️ Schema update not needed or already applied:', error.message);
+        console.log('ℹ️ Schema update or admin creation not needed:', error.message);
       }
     }
 
