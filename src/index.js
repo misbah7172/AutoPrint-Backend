@@ -129,11 +129,11 @@ app.get('/health', (req, res) => {
 
 // API routes
 app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes); // Admin routes handle their own authentication
 app.use('/api/users', authenticate, userRoutes);
 app.use('/api/documents', authenticate, documentRoutes);
 app.use('/api/print-jobs', authenticate, printJobRoutes);
 app.use('/api/payments', authenticate, paymentRoutes);
-app.use('/api/admin', authenticate, adminRoutes);
 app.use('/api/queue', queueRoutes);
 app.use('/api/print', printRoutes);
 
