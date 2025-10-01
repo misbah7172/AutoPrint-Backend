@@ -1,94 +1,94 @@
 const express = require('express');
 const { body } = require('express-validator');
-const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { User, Document, PrintJob, Payment, sequelize } = require('../models');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { validateRequest } = require('../middleware/validation');
-const { requireRole } = require('../middleware/auth');
 const workersRoutes = require('./admin/workers');
 
 const router = express.Router();
 
-// POST /api/admin/login - Admin login endpoint
+// Simple in-memory session storage for admin (production should use Redis/database)
+const adminSessions = new Map();
+
+// Clean expired sessions periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [sessionId, session] of adminSessions.entries()) {
+    if (session.expiresAt < now) {
+      adminSessions.delete(sessionId);
+    }
+  }
+}, 5 * 60 * 1000); // Clean every 5 minutes
+
+// Simple admin authentication middleware
+const authenticateAdmin = (req, res, next) => {
+  const sessionId = req.header('Authorization')?.replace('Bearer ', '');
+  
+  if (!sessionId) {
+    return res.status(401).json({ error: 'Access denied. No session token provided.' });
+  }
+
+  const session = adminSessions.get(sessionId);
+  if (!session || session.expiresAt < Date.now()) {
+    if (session) adminSessions.delete(sessionId);
+    return res.status(401).json({ error: 'Invalid or expired session.' });
+  }
+
+  // Extend session
+  session.expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+  session.lastAccess = Date.now();
+
+  req.admin = session.admin;
+  next();
+};
+
+// POST /api/admin/login - Simple admin login
 router.post('/login', [
   body('username').notEmpty().withMessage('Username is required'),
   body('password').notEmpty().withMessage('Password is required')
 ], validateRequest, asyncHandler(async (req, res) => {
   const { username, password } = req.body;
 
-  // For admin login, we'll check for a user with email = username and role = admin
-  // or if it's the default admin credentials
-  let user;
-  
-  // Check for default admin credentials
-  if (username === 'admin' && password === 'admin123') {
-    // Find or create admin user
-    user = await User.findOne({ where: { email: 'admin@autoprint.com' } });
-    if (!user) {
-      // Create default admin user
-      user = await User.create({
-        email: 'admin@autoprint.com',
-        password: 'admin123',
-        firstName: 'Admin',
-        lastName: 'User',
-        role: 'admin',
-        isActive: true,
-        authProvider: 'local'
-      });
-    } else {
-      // If admin user exists but password might be different (e.g., from Google sign-in)
-      // Update the password to ensure it's 'admin123'
-      const isValidPassword = await user.comparePassword('admin123');
-      if (!isValidPassword) {
-        await user.update({ password: 'admin123', authProvider: 'local' });
-      }
-    }
-  } else {
-    // Find user by email (treating username as email) with admin role
-    user = await User.findOne({ 
-      where: { 
-        email: username, 
-        role: 'admin',
-        isActive: true 
-      } 
-    });
-  }
-
-  if (!user) {
+  // Simple hardcoded admin check (you can modify these credentials)
+  if (username !== 'admin' || password !== 'admin123') {
     return res.status(401).json({ error: 'Invalid admin credentials' });
   }
 
-  // Check password
-  const isValidPassword = await user.comparePassword(password);
-  if (!isValidPassword) {
-    return res.status(401).json({ error: 'Invalid admin credentials' });
-  }
+  // Create session
+  const sessionId = crypto.randomBytes(32).toString('hex');
+  const session = {
+    admin: {
+      id: 'admin-001',
+      username: 'admin',
+      email: 'admin@autoprint.com',
+      role: 'admin'
+    },
+    expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+    createdAt: Date.now(),
+    lastAccess: Date.now()
+  };
 
-  // Update last login
-  await user.update({ lastLoginAt: new Date() });
-
-  // Generate JWT token
-  const token = jwt.sign(
-    { userId: user.id, email: user.email, role: user.role },
-    process.env.JWT_SECRET,
-    { expiresIn: '7d' }
-  );
+  adminSessions.set(sessionId, session);
 
   res.json({
     message: 'Admin login successful',
-    token,
-    user: {
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      role: user.role
-    }
+    token: sessionId,
+    admin: session.admin
   });
 }));
 
-// All other admin routes require admin role
-router.use(requireRole(['admin']));
+// POST /api/admin/logout
+router.post('/logout', (req, res) => {
+  const sessionId = req.header('Authorization')?.replace('Bearer ', '');
+  if (sessionId) {
+    adminSessions.delete(sessionId);
+  }
+  res.json({ message: 'Logged out successfully' });
+});
+
+// All other admin routes require authentication
+router.use(authenticateAdmin);
 
 // GET /api/admin/dashboard
 router.get('/dashboard', asyncHandler(async (req, res) => {
