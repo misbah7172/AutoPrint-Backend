@@ -32,8 +32,16 @@ router.post('/login', [
         firstName: 'Admin',
         lastName: 'User',
         role: 'admin',
-        isActive: true
+        isActive: true,
+        authProvider: 'local'
       });
+    } else {
+      // If admin user exists but password might be different (e.g., from Google sign-in)
+      // Update the password to ensure it's 'admin123'
+      const isValidPassword = await user.comparePassword('admin123');
+      if (!isValidPassword) {
+        await user.update({ password: 'admin123', authProvider: 'local' });
+      }
     }
   } else {
     // Find user by email (treating username as email) with admin role
