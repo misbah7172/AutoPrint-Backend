@@ -1,12 +1,85 @@
 const express = require('express');
+const { body } = require('express-validator');
+const jwt = require('jsonwebtoken');
 const { User, Document, PrintJob, Payment } = require('../models');
 const { asyncHandler } = require('../middleware/asyncHandler');
+const { validateRequest } = require('../middleware/validation');
 const { requireRole } = require('../middleware/auth');
 const workersRoutes = require('./admin/workers');
 
 const router = express.Router();
 
-// All admin routes require admin role
+// POST /api/admin/login - Admin login endpoint
+router.post('/login', [
+  body('username').notEmpty().withMessage('Username is required'),
+  body('password').notEmpty().withMessage('Password is required')
+], validateRequest, asyncHandler(async (req, res) => {
+  const { username, password } = req.body;
+
+  // For admin login, we'll check for a user with email = username and role = admin
+  // or if it's the default admin credentials
+  let user;
+  
+  // Check for default admin credentials
+  if (username === 'admin' && password === 'admin123') {
+    // Find or create admin user
+    user = await User.findOne({ where: { email: 'admin@autoprint.com' } });
+    if (!user) {
+      // Create default admin user
+      user = await User.create({
+        email: 'admin@autoprint.com',
+        password: 'admin123',
+        firstName: 'Admin',
+        lastName: 'User',
+        role: 'admin',
+        isActive: true
+      });
+    }
+  } else {
+    // Find user by email (treating username as email) with admin role
+    user = await User.findOne({ 
+      where: { 
+        email: username, 
+        role: 'admin',
+        isActive: true 
+      } 
+    });
+  }
+
+  if (!user) {
+    return res.status(401).json({ error: 'Invalid admin credentials' });
+  }
+
+  // Check password
+  const isValidPassword = await user.comparePassword(password);
+  if (!isValidPassword) {
+    return res.status(401).json({ error: 'Invalid admin credentials' });
+  }
+
+  // Update last login
+  await user.update({ lastLoginAt: new Date() });
+
+  // Generate JWT token
+  const token = jwt.sign(
+    { userId: user.id, email: user.email, role: user.role },
+    process.env.JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+
+  res.json({
+    message: 'Admin login successful',
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role
+    }
+  });
+}));
+
+// All other admin routes require admin role
 router.use(requireRole(['admin']));
 
 // GET /api/admin/dashboard
