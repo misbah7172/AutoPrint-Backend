@@ -352,7 +352,7 @@ router.put('/payments/:id/verify', asyncHandler(async (req, res) => {
     await payment.update({
       status: 'verified',
       verificationDetails: {
-        verifiedBy: req.user.email,
+        verifiedBy: req.admin.email, // Fixed: use req.admin instead of req.user
         verifiedAt: new Date(),
         notes: notes || 'Payment verified by admin'
       }
