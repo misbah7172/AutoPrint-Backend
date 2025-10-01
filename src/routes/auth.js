@@ -110,4 +110,116 @@ router.post('/refresh', asyncHandler(async (req, res) => {
   }
 }));
 
+// POST /api/auth/google-signin - Google sign-in endpoint for mobile apps
+router.post('/google-signin', [
+  body('firebaseUid').notEmpty().withMessage('Firebase UID is required'),
+  body('email').isEmail().normalizeEmail(),
+  body('name').notEmpty().withMessage('Name is required'),
+  body('photoUrl').optional(),
+  body('authProvider').optional()
+], validateRequest, asyncHandler(async (req, res) => {
+  const { firebaseUid, email, name, photoUrl, authProvider } = req.body;
+
+  try {
+    // Check if user already exists
+    let user = await User.findOne({ where: { email } });
+    let isNewUser = false;
+
+    if (!user) {
+      // Create new user from Google sign-in
+      const nameParts = name.split(' ');
+      const firstName = nameParts[0] || 'Unknown';
+      const lastName = nameParts.slice(1).join(' ') || 'User';
+
+      user = await User.create({
+        email,
+        firstName,
+        lastName,
+        password: firebaseUid, // Use Firebase UID as password (will be hashed)
+        photoUrl: photoUrl || null,
+        authProvider: authProvider || 'google',
+        firebaseUid,
+        role: 'student',
+        isActive: true,
+        balance: 0
+      });
+      isNewUser = true;
+    } else {
+      // Update existing user's photo URL and Firebase UID if needed
+      await user.update({
+        photoUrl: photoUrl || user.photoUrl,
+        firebaseUid: firebaseUid,
+        authProvider: authProvider || user.authProvider || 'google',
+        lastLoginAt: new Date()
+      });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.status(isNewUser ? 201 : 200).json({
+      message: isNewUser ? 'User created successfully' : 'User authenticated successfully',
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        name: `${user.firstName} ${user.lastName}`,
+        photoUrl: user.photoUrl,
+        authProvider: user.authProvider,
+        role: user.role,
+        balance: user.balance
+      },
+      isNewUser
+    });
+  } catch (error) {
+    console.error('Google sign-in error:', error);
+    res.status(500).json({ 
+      error: 'Failed to authenticate user',
+      message: error.message 
+    });
+  }
+}));
+
+// GET /api/auth/profile - Get user profile
+router.get('/profile', asyncHandler(async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authorization token required' });
+  }
+
+  const token = authHeader.substring(7);
+  
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findByPk(decoded.userId);
+
+    if (!user || !user.isActive) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        name: `${user.firstName} ${user.lastName}`,
+        photoUrl: user.photoUrl,
+        authProvider: user.authProvider,
+        role: user.role,
+        balance: user.balance,
+        studentId: user.studentId
+      }
+    });
+  } catch (error) {
+    res.status(401).json({ error: 'Invalid token' });
+  }
+}));
+
 module.exports = router;

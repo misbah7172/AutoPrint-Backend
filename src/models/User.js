@@ -54,6 +54,22 @@ module.exports = (sequelize, DataTypes) => {
         min: 0
       }
     },
+    photoUrl: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      validate: {
+        isUrl: true
+      }
+    },
+    firebaseUid: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      unique: true
+    },
+    authProvider: {
+      type: DataTypes.ENUM('local', 'google', 'facebook'),
+      defaultValue: 'local'
+    },
     isActive: {
       type: DataTypes.BOOLEAN,
       defaultValue: true
